@@ -226,24 +226,12 @@ export function ClientDashboard({ onBack, onSignOut }: ClientDashboardProps) {
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="password">Mot de passe (si requis)</Label>
-                  <div className="relative">
-                    <Input
-                      id="password"
-                      name="password"
-                      type={showAccessPassword ? 'text' : 'password'}
-                      placeholder="Mot de passe de la collection"
-                      className="pr-10"
-                    />
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      className="absolute right-1 top-1/2 -translate-y-1/2 text-slate-500"
-                      onClick={() => setShowAccessPassword((v) => !v)}
-                    >
-                      {showAccessPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                    </Button>
-                  </div>
+                  <Input
+                    id="password"
+                    name="password"
+                    type="password"
+                    placeholder="Mot de passe de la collection"
+                  />
                 </div>
                 <div className="flex justify-end space-x-2">
                   <Button

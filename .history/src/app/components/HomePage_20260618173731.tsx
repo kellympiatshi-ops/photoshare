@@ -1,6 +1,7 @@
 import { Button } from './ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
 import { Camera, Image, Upload, Download, Images, Link2, Lock, MessageCircle, Eye, ArrowRight } from 'lucide-react';
+import ThemeToggle from './ThemeToggle';
 
 interface HomePageProps {
   onSelectMode: (mode: 'photographer' | 'client') => void;
@@ -24,9 +25,12 @@ export function HomePage({ onSelectMode, onSignOut, userEmail }: HomePageProps) 
                 {userEmail ? <p className="text-xs text-[color:var(--muted-foreground)]">{userEmail}</p> : null}
               </div>
             </div>
-            <Button variant="ghost" onClick={onSignOut} className="text-sm text-[color:var(--muted-foreground)]">
-              Déconnexion
-            </Button>
+            <div className="flex items-center space-x-3">
+              <ThemeToggle />
+              <Button variant="ghost" onClick={onSignOut} className="text-sm text-[color:var(--muted-foreground)]">
+                Déconnexion
+              </Button>
+            </div>
           </div>
         </div>
       </header>

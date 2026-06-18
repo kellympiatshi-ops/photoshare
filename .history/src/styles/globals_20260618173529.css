@@ -1,12 +1,6 @@
 /* Global typographie et rendu inspirés d'Apple / Netflix */
 :root {
 	--ui-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", system-ui, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
-
-	/* Variable de fond: placez votre image dans /assets/background.jpg */
-	--background: linear-gradient(rgba(11,18,32,0.55), rgba(11,18,32,0.55)), url('/assets/background.jpg') center/cover no-repeat fixed;
-	--background-color: #0b1220; /* fallback sombre */
-	--foreground: #e6eef8; /* couleur de texte par défaut */
-
 }
 
 html, body, #root {

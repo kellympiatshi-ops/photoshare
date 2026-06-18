@@ -8,18 +8,19 @@ import { Progress } from './ui/progress';
 import { ArrowLeft, Upload, Download, Heart, MessageCircle, Star, Trash2, Image as ImageIcon } from 'lucide-react';
 import { toast } from 'sonner';
 import JSZip from 'jszip';
-import { projectId, publicAnonKey } from '../../lib/supabase';
+import { API_BASE_URL, authHeaders, getOrCreateLocalId } from '../../lib/api';
+import type { Collection, Photo, PhotoComment } from '../types';
 
 interface CollectionViewProps {
-  collection: any;
+  collection: Collection;
   isPhotographer: boolean;
   onBack: () => void;
 }
 
 export function CollectionView({ collection, isPhotographer, onBack }: CollectionViewProps) {
-  const [photos, setPhotos] = useState<any[]>([]);
-  const [selectedPhoto, setSelectedPhoto] = useState<any>(null);
-  const [comments, setComments] = useState<any[]>([]);
+  const [photos, setPhotos] = useState<Photo[]>([]);
+  const [selectedPhoto, setSelectedPhoto] = useState<Photo | null>(null);
+  const [comments, setComments] = useState<PhotoComment[]>([]);
   const [userLikes, setUserLikes] = useState<Set<string>>(new Set());
   const [userFavorites, setUserFavorites] = useState<Set<string>>(new Set());
   const [uploadProgress, setUploadProgress] = useState(0);
@@ -40,6 +41,8 @@ export function CollectionView({ collection, isPhotographer, onBack }: Collectio
     return sessionId || '';
   };
 
+  const getVisitorId = () => getOrCreateLocalId('visitor_id');
+
   const loadUserName = () => {
     const stored = localStorage.getItem('user_display_name');
     setUserName(stored || '');
@@ -57,11 +60,9 @@ export function CollectionView({ collection, isPhotographer, onBack }: Collectio
       const timeoutId = setTimeout(() => controller.abort(), 5000);
       
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/make-server-66ce0d40/collections/${collection.id}/photos`,
+        `${API_BASE_URL}/collections/${collection.id}/photos`,
         {
-          headers: {
-            Authorization: `Bearer ${publicAnonKey}`,
-          },
+          headers: authHeaders,
           signal: controller.signal,
         }
       );
@@ -127,6 +128,11 @@ export function CollectionView({ collection, isPhotographer, onBack }: Collectio
   };
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (collection.localOnly) {
+      toast.error('Cette collection est locale. Connectez Supabase pour téléverser des photos.');
+      return;
+    }
+
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
@@ -144,12 +150,10 @@ export function CollectionView({ collection, isPhotographer, onBack }: Collectio
         formData.append('sessionId', sessionId);
 
         const response = await fetch(
-          `https://${projectId}.supabase.co/functions/v1/make-server-66ce0d40/photos/upload`,
+          `${API_BASE_URL}/photos/upload`,
           {
             method: 'POST',
-            headers: {
-              Authorization: `Bearer ${publicAnonKey}`,
-            },
+            headers: authHeaders,
             body: formData,
           }
         );
@@ -182,12 +186,10 @@ export function CollectionView({ collection, isPhotographer, onBack }: Collectio
     try {
       const sessionId = getSessionId();
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/make-server-66ce0d40/photos/${collection.id}/${photoId}?sessionId=${sessionId}`,
+        `${API_BASE_URL}/photos/${collection.id}/${photoId}?sessionId=${sessionId}`,
         {
           method: 'DELETE',
-          headers: {
-            Authorization: `Bearer ${publicAnonKey}`,
-          },
+          headers: authHeaders,
         }
       );
 
@@ -278,25 +280,31 @@ export function CollectionView({ collection, isPhotographer, onBack }: Collectio
 
       // Mettre à jour le compteur de likes
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/make-server-66ce0d40/photos/${photoId}/like`,
+        `${API_BASE_URL}/photos/${photoId}/like`,
         {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            Authorization: `Bearer ${publicAnonKey}`,
+            ...authHeaders,
           },
           body: JSON.stringify({ 
             collectionId: collection.id,
-            liked: !isLiked
+            liked: !isLiked,
+            userId: getVisitorId(),
           }),
         }
       );
 
       const data = await response.json();
       if (response.ok && data.likes !== undefined) {
-        setPhotos(photos.map(p => 
-          p.id === photoId ? { ...p, likes: data.likes } : p
-        ));
+        setPhotos((currentPhotos) =>
+          currentPhotos.map((photo) =>
+            photo.id === photoId ? { ...photo, likes: data.likes } : photo
+          )
+        );
+        setSelectedPhoto((currentPhoto) =>
+          currentPhoto?.id === photoId ? { ...currentPhoto, likes: data.likes } : currentPhoto
+        );
       }
     } catch (error) {
       console.error('Toggle like error:', error);
@@ -321,11 +329,9 @@ export function CollectionView({ collection, isPhotographer, onBack }: Collectio
   const loadComments = async (photoId: string) => {
     try {
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/make-server-66ce0d40/photos/${photoId}/comments`,
+        `${API_BASE_URL}/photos/${photoId}/comments`,
         {
-          headers: {
-            Authorization: `Bearer ${publicAnonKey}`,
-          },
+          headers: authHeaders,
         }
       );
 
@@ -347,12 +353,12 @@ export function CollectionView({ collection, isPhotographer, onBack }: Collectio
 
     try {
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/make-server-66ce0d40/comments`,
+        `${API_BASE_URL}/comments`,
         {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            Authorization: `Bearer ${publicAnonKey}`,
+            ...authHeaders,
           },
           body: JSON.stringify({
             photoId,
@@ -401,9 +407,9 @@ export function CollectionView({ collection, isPhotographer, onBack }: Collectio
                     onChange={handleFileSelect}
                     className="hidden"
                   />
-                  <Button onClick={() => fileInputRef.current?.click()} disabled={isUploading}>
+                  <Button onClick={() => fileInputRef.current?.click()} disabled={isUploading || collection.localOnly}>
                     <Upload className="w-4 h-4 mr-2" />
-                    {isUploading ? 'Téléversement...' : 'Ajouter des photos'}
+                    {isUploading ? 'Téléversement...' : collection.localOnly ? 'Supabase requis' : 'Ajouter des photos'}
                   </Button>
                 </>
               )}
@@ -442,9 +448,9 @@ export function CollectionView({ collection, isPhotographer, onBack }: Collectio
                   : 'Le photographe n\'a pas encore ajouté de photos'}
               </p>
               {isPhotographer && (
-                <Button onClick={() => fileInputRef.current?.click()}>
+                <Button onClick={() => fileInputRef.current?.click()} disabled={collection.localOnly}>
                   <Upload className="w-4 h-4 mr-2" />
-                  Ajouter des photos
+                  {collection.localOnly ? 'Supabase requis' : 'Ajouter des photos'}
                 </Button>
               )}
             </CardContent>

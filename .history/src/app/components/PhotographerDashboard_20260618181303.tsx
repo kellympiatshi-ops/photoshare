@@ -349,24 +349,12 @@ export function PhotographerDashboard({ onBack, onSignOut }: PhotographerDashboa
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="password">Mot de passe (optionnel)</Label>
-                  <div className="relative">
-                    <Input
-                      id="password"
-                      name="password"
-                      type={showCreatePassword ? 'text' : 'password'}
-                      placeholder="Protection supplémentaire"
-                      className="pr-10"
-                    />
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      className="absolute right-1 top-1/2 -translate-y-1/2 text-slate-500"
-                      onClick={() => setShowCreatePassword((v) => !v)}
-                    >
-                      {showCreatePassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                    </Button>
-                  </div>
+                  <Input
+                    id="password"
+                    name="password"
+                    type="password"
+                    placeholder="Protection supplémentaire"
+                  />
                   <p className="text-xs text-gray-500">
                     Ajoutez un mot de passe pour sécuriser l'accès
                   </p>

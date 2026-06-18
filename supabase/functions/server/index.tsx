@@ -5,6 +5,14 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import * as kv from "./kv_store.tsx";
 
 const app = new Hono();
+const BUCKET_NAME = 'make-66ce0d40-photos';
+const SIGNED_URL_EXPIRES_IN = Number(Deno.env.get('SIGNED_URL_EXPIRES_IN') ?? 3600);
+const MAX_UPLOAD_BYTES = Number(Deno.env.get('MAX_UPLOAD_BYTES') ?? 25 * 1024 * 1024);
+const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
+const allowedOrigins = (Deno.env.get('ALLOWED_ORIGINS') ?? '*')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
 
 // Initialize Supabase client
 const supabase = createClient(
@@ -13,7 +21,6 @@ const supabase = createClient(
 );
 
 // Create storage bucket on startup
-const BUCKET_NAME = 'make-66ce0d40-photos';
 (async () => {
   try {
     const { data: buckets } = await supabase.storage.listBuckets();
@@ -34,13 +41,112 @@ app.use('*', logger(console.log));
 app.use(
   "/*",
   cors({
-    origin: "*",
+    origin: (origin) => isAllowedOrigin(origin) ? origin : allowedOrigins[0] ?? '',
     allowHeaders: ["Content-Type", "Authorization"],
     allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     exposeHeaders: ["Content-Length"],
     maxAge: 600,
   }),
 );
+
+function sanitizeCollection(collection: any) {
+  const { password, passwordHash, ...safeCollection } = collection;
+  return {
+    ...safeCollection,
+    passwordProtected: Boolean(collection.passwordProtected || password || passwordHash),
+  };
+}
+
+async function hashPassword(password: string) {
+  const iterations = 100000;
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const passwordKey = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(password),
+    'PBKDF2',
+    false,
+    ['deriveBits'],
+  );
+  const derivedBits = await crypto.subtle.deriveBits(
+    {
+      name: 'PBKDF2',
+      hash: 'SHA-256',
+      salt,
+      iterations,
+    },
+    passwordKey,
+    256,
+  );
+  return `pbkdf2$${iterations}$${toHex(salt)}$${toHex(new Uint8Array(derivedBits))}`;
+}
+
+async function verifyCollectionPassword(collection: any, password: string | undefined) {
+  if (!collection.passwordProtected && !collection.password && !collection.passwordHash) {
+    return true;
+  }
+
+  if (!password) {
+    return false;
+  }
+
+  if (collection.passwordHash) {
+    return verifyPasswordHash(password, collection.passwordHash);
+  }
+
+  // Backward compatibility for collections created before password hashing.
+  return collection.password === password;
+}
+
+function isAllowedOrigin(origin: string) {
+  return allowedOrigins.includes('*') || allowedOrigins.includes(origin);
+}
+
+function isValidImage(file: File) {
+  return ALLOWED_IMAGE_TYPES.has(file.type) && file.size <= MAX_UPLOAD_BYTES;
+}
+
+function toHex(bytes: Uint8Array) {
+  return Array.from(bytes)
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+function fromHex(hex: string) {
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < bytes.length; i++) {
+    bytes[i] = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  }
+  return bytes;
+}
+
+async function verifyPasswordHash(password: string, storedHash: string) {
+  if (!storedHash.startsWith('pbkdf2$')) {
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(password));
+    return toHex(new Uint8Array(digest)) === storedHash;
+  }
+
+  const [, iterationsValue, saltValue, hashValue] = storedHash.split('$');
+  const salt = fromHex(saltValue);
+  const expectedHash = fromHex(hashValue);
+  const passwordKey = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(password),
+    'PBKDF2',
+    false,
+    ['deriveBits'],
+  );
+  const derivedBits = await crypto.subtle.deriveBits(
+    {
+      name: 'PBKDF2',
+      hash: 'SHA-256',
+      salt,
+      iterations: Number(iterationsValue),
+    },
+    passwordKey,
+    expectedHash.length * 8,
+  );
+  return toHex(new Uint8Array(derivedBits)) === toHex(expectedHash);
+}
 
 // Generate random code for collections
 function generateCollectionCode(): string {
@@ -75,7 +181,8 @@ app.post("/make-server-66ce0d40/collections", async (c) => {
       id: collectionId,
       name,
       description: description || '',
-      password: password || null,
+      passwordHash: password ? await hashPassword(password) : null,
+      passwordProtected: Boolean(password),
       code,
       photographerName: photographerName || 'Photographe',
       sessionId,
@@ -86,7 +193,7 @@ app.post("/make-server-66ce0d40/collections", async (c) => {
     await kv.set(`collection:${collectionId}`, collection);
     await kv.set(`collection:code:${code}`, collectionId);
 
-    return c.json({ collection });
+    return c.json({ collection: sanitizeCollection(collection) });
   } catch (error) {
     console.error('Create collection error:', error);
     return c.json({ error: 'Failed to create collection' }, 500);
@@ -105,9 +212,9 @@ app.get("/make-server-66ce0d40/collections", async (c) => {
     const allCollections = await kv.getByPrefix('collection:');
     
     // Filter collections by sessionId
-    const userCollections = allCollections.filter((col: any) => 
-      col.sessionId === sessionId && !col.id.includes(':code:')
-    );
+    const userCollections = allCollections
+      .filter((col: any) => col.sessionId === sessionId && col.id)
+      .map(sanitizeCollection);
 
     return c.json({ collections: userCollections });
   } catch (error) {
@@ -126,7 +233,7 @@ app.get("/make-server-66ce0d40/collections/:id", async (c) => {
       return c.json({ error: 'Collection not found' }, 404);
     }
 
-    return c.json({ collection });
+    return c.json({ collection: sanitizeCollection(collection) });
   } catch (error) {
     console.error('Get collection error:', error);
     return c.json({ error: 'Failed to fetch collection' }, 500);
@@ -149,12 +256,18 @@ app.post("/make-server-66ce0d40/collections/access", async (c) => {
 
     const collection = await kv.get(`collection:${collectionId}`);
     
-    // Check password if required
-    if (collection.password && collection.password !== password) {
+    if (!await verifyCollectionPassword(collection, password)) {
       return c.json({ error: 'Invalid password' }, 403);
     }
 
-    return c.json({ collection });
+    if (collection.password && !collection.passwordHash) {
+      collection.passwordHash = await hashPassword(password);
+      collection.password = null;
+      collection.passwordProtected = true;
+      await kv.set(`collection:${collectionId}`, collection);
+    }
+
+    return c.json({ collection: sanitizeCollection(collection) });
   } catch (error) {
     console.error('Access collection error:', error);
     return c.json({ error: 'Failed to access collection' }, 500);
@@ -180,12 +293,16 @@ app.put("/make-server-66ce0d40/collections/:id", async (c) => {
       ...collection,
       name: name ?? collection.name,
       description: description ?? collection.description,
-      password: password !== undefined ? password : collection.password,
+      passwordHash: password !== undefined
+        ? (password ? await hashPassword(password) : null)
+        : collection.passwordHash,
+      password: null,
+      passwordProtected: password !== undefined ? Boolean(password) : Boolean(collection.passwordProtected || collection.password || collection.passwordHash),
     };
 
     await kv.set(`collection:${collectionId}`, updatedCollection);
 
-    return c.json({ collection: updatedCollection });
+    return c.json({ collection: sanitizeCollection(updatedCollection) });
   } catch (error) {
     console.error('Update collection error:', error);
     return c.json({ error: 'Failed to update collection' }, 500);
@@ -250,6 +367,10 @@ app.post("/make-server-66ce0d40/photos/upload", async (c) => {
       return c.json({ error: 'Only the photographer can upload photos' }, 403);
     }
 
+    if (!isValidImage(file)) {
+      return c.json({ error: 'Only JPEG, PNG, WebP or GIF images up to 25 MB are allowed' }, 400);
+    }
+
     const photoId = crypto.randomUUID();
     const fileExt = file.name.split('.').pop();
     const storagePath = `${collectionId}/${photoId}.${fileExt}`;
@@ -266,10 +387,9 @@ app.post("/make-server-66ce0d40/photos/upload", async (c) => {
       return c.json({ error: 'Failed to upload photo' }, 500);
     }
 
-    // Create signed URL (valid for 1 year)
     const { data: urlData } = await supabase.storage
       .from(BUCKET_NAME)
-      .createSignedUrl(storagePath, 31536000);
+      .createSignedUrl(storagePath, SIGNED_URL_EXPIRES_IN);
 
     const photo = {
       id: photoId,
@@ -312,7 +432,7 @@ app.get("/make-server-66ce0d40/collections/:id/photos", async (c) => {
     for (const photo of photos) {
       const { data: urlData } = await supabase.storage
         .from(BUCKET_NAME)
-        .createSignedUrl(photo.storagePath, 31536000);
+        .createSignedUrl(photo.storagePath, SIGNED_URL_EXPIRES_IN);
       photo.url = urlData?.signedUrl;
     }
 
@@ -416,17 +536,25 @@ app.get("/make-server-66ce0d40/photos/:photoId/comments", async (c) => {
 app.post("/make-server-66ce0d40/photos/:photoId/like", async (c) => {
   try {
     const photoId = c.req.param('photoId');
-    const { collectionId, liked } = await c.req.json();
+    const { collectionId, liked, userId } = await c.req.json();
+
+    if (!collectionId || !userId) {
+      return c.json({ error: 'collectionId and userId are required' }, 400);
+    }
 
     const photo = await kv.get(`photo:${collectionId}:${photoId}`);
     if (!photo) {
       return c.json({ error: 'Photo not found' }, 404);
     }
 
-    // Update likes count
-    if (liked) {
+    const likeKey = `like:${photoId}:${userId}`;
+    const existingLike = await kv.get(likeKey);
+
+    if (liked && !existingLike) {
+      await kv.set(likeKey, { photoId, collectionId, userId, createdAt: new Date().toISOString() });
       photo.likes = (photo.likes || 0) + 1;
-    } else {
+    } else if (!liked && existingLike) {
+      await kv.del(likeKey);
       photo.likes = Math.max(0, (photo.likes || 0) - 1);
     }
 
